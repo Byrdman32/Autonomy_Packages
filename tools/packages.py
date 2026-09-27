@@ -54,8 +54,7 @@ class Recipe:
     source: str
     tag: str = ""
     commit: str = ""
-    submodules: bool = False
-    patches: list[str] = field(default_factory=list)
+    cmake: bool = True  # false for a package that only installs files from its source (install_files)
     install_files: list[list[str]] = field(default_factory=list)
     architecture: str = "any"
     prefix: str = "/usr/local"
@@ -86,9 +85,6 @@ def load_settings(root: Path = ROOT) -> dict:
     return tomllib.loads((root / "repo.toml").read_text())
 
 
-PATCHES_DIR = "packages/patches"
-
-
 def load_recipes(root: Path = ROOT) -> dict[str, Recipe]:
     settings = load_settings(root)
     recipes = {}
@@ -111,9 +107,8 @@ def load_recipes(root: Path = ROOT) -> dict[str, Recipe]:
         for entry in recipe.install_files:
             if len(entry) != 2 or any(part.startswith("/") or ".." in Path(part).parts for part in entry):
                 raise PackagingError(f"{path.name}: install_files entries are [source path, destination], both relative")
-        for patch in recipe.patches:
-            if "/" in patch or not (root / PATCHES_DIR / patch).is_file():
-                raise PackagingError(f"{path.name}: no patch {patch!r} in {PATCHES_DIR}")
+        if not recipe.cmake and not recipe.install_files:
+            raise PackagingError(f"{path.name}: a recipe without cmake must list install_files")
         recipes[name] = recipe
     for recipe in recipes.values():
         for dependency in recipe.depends:
@@ -384,13 +379,10 @@ def build_recipe(recipe: Recipe, recipes: dict[str, Recipe], arch: str, settings
         run(["git", "-C", str(source), "checkout", "--quiet", "FETCH_HEAD"])
     else:
         run(["git", "clone", "--quiet", "--depth", "1", "--branch", recipe.source_ref, recipe.source, str(source)])
-    if recipe.submodules:
-        run(["git", "-C", str(source), "submodule", "update", "--quiet", "--init", "--recursive", "--depth", "1"])
-    for patch in recipe.patches:
-        run(["git", "-C", str(source), "apply", str(ROOT / PATCHES_DIR / patch)])
-    run(cmake_command(recipe, source, build))
-    run(["cmake", "--build", str(build), "--parallel", str(os.cpu_count() or 2)])
-    run(["cmake", "--install", str(build)], env={**os.environ, "DESTDIR": str(stage)})
+    if recipe.cmake:
+        run(cmake_command(recipe, source, build))
+        run(["cmake", "--build", str(build), "--parallel", str(os.cpu_count() or 2)])
+        run(["cmake", "--install", str(build)], env={**os.environ, "DESTDIR": str(stage)})
     install_extra_files(recipe, source, stage)
     return package(recipe, recipes, arch, settings, stage, out)
 
