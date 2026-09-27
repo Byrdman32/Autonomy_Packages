@@ -41,21 +41,15 @@ jobs:
             echo "Recipe and packaging tests, ruff and actionlint: **${{ job.status }}**."
           } >> "${GITHUB_STEP_SUMMARY}"
 
-  build:
-    name: build:${{ matrix.arch }}
+  plan:
+    name: plan
     needs: lint
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 240
+    runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ github.token }}
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
     steps:
       - uses: actions/checkout@v7
 
@@ -71,14 +65,55 @@ jobs:
       - id: plan
         name: Plan
         run: |
-          python3 tools/packages.py plan --arch "${{ matrix.arch }}" --index Packages | tee plan.json
-          echo "count=$(python3 -c 'import json; print(len(json.load(open("plan.json"))["build"]))')" >> "${GITHUB_OUTPUT}"
+          python3 tools/packages.py matrix --index Packages > matrix.json
+          echo "matrix=$(cat matrix.json)" >> "${GITHUB_OUTPUT}"
+          echo "count=$(python3 -c 'import json; print(len(json.load(open("matrix.json"))))')" >> "${GITHUB_OUTPUT}"
 
-      - if: steps.plan.outputs.count != '0'
-        uses: docker/setup-buildx-action@v4
+      - name: Job summary
+        if: always()
+        run: |
+          python3 - >> "${GITHUB_STEP_SUMMARY}" <<'PY'
+          import json
+          from pathlib import Path
+          print("### 🗺️ plan\n")
+          if not Path("matrix.json").is_file():
+              print("Planning failed; see the log.")
+          elif not (jobs := json.load(open("matrix.json"))):
+              print("Nothing to build: every package is already published.")
+          else:
+              print(f"{len(jobs)} packages to build, one job each:\n")
+              print("| Package | Version | Architecture |\n| --- | --- | --- |")
+              for job in jobs:
+                  arch = "all" if job["file"].endswith("_all.deb") else job["arch"]
+                  print(f"| `{job['package']}` | {job['version']} | {arch} |")
+          PY
 
-      - if: steps.plan.outputs.count != '0'
-        name: Builder image
+  build:
+    name: build:${{ matrix.name }}:${{ matrix.arch }}
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download the published index
+        run: |
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            curl -fsSL --retry 5 --retry-all-errors -o Packages "${REPO_URL}/Packages"
+          else
+            : > Packages
+          fi
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Builder image
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -91,43 +126,41 @@ jobs:
           DOCKER_BUILD_RECORD_UPLOAD: "false"
           DOCKER_BUILD_SUMMARY: "false"
 
-      - if: steps.plan.outputs.count != '0'
-        name: Build packages
+      - name: Build ${{ matrix.package }}
         run: |
           docker run --rm -v "$PWD:/repo" -w /repo autonomy-packages-builder \
-            python3 tools/packages.py build --arch "${{ matrix.arch }}" --index Packages --out dist --repo-url "${REPO_URL}"
+            python3 tools/packages.py build --arch "${{ matrix.arch }}" --index Packages --out dist \
+              --repo-url "${REPO_URL}" --only "${{ matrix.name }}"
           sudo chown -R "$(id -u):$(id -g)" dist
+          test -f "dist/${{ matrix.file }}"
 
-      - if: steps.plan.outputs.count != '0'
-        uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7
         with:
-          name: debs-${{ matrix.arch }}
-          path: dist/*.deb
+          name: deb-${{ matrix.name }}-${{ matrix.arch }}
+          path: dist/${{ matrix.file }}
+          if-no-files-found: error
 
       - name: Job summary
-        if: always() && steps.plan.outcome == 'success'
+        if: always()
         run: |
-          python3 - "${{ matrix.arch }}" "${{ job.status }}" >> "${GITHUB_STEP_SUMMARY}" <<'PY'
-          import json, sys
-          from pathlib import Path
-          arch, status = sys.argv[1:]
-          plan = json.load(open("plan.json"))
-          built = {path.name for path in Path("dist").glob("*.deb")}
-          print(f"### 📦 build:{arch}\n")
-          if not plan["build"]:
-              print(f"Nothing to build: all {len(plan['published'])} packages are already published.")
-          else:
-              print("| Package | Version | File | Result |\n| --- | --- | --- | --- |")
-              for item in plan["build"]:
-                  result = "✅ built" if item["file"] in built else ("❌ failed" if status != "success" else "⏭️ not built")
-                  print(f"| `{item['package']}` | {item['version']} | `{item['file']}` | {result} |")
-              print(f"\n{len(plan['published'])} other packages are already published.")
-          PY
+          {
+            echo "### 📦 ${{ matrix.package }} ${{ matrix.version }} (${{ matrix.arch }})"
+            echo
+            if [ -f "dist/${{ matrix.file }}" ]; then
+              echo "✅ Built \`${{ matrix.file }}\` ($(du -h "dist/${{ matrix.file }}" | cut -f1))."
+              echo
+              echo '```text'
+              dpkg-deb --field "dist/${{ matrix.file }}" Depends
+              echo '```'
+            else
+              echo "❌ Build failed; see the log."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
 
   publish:
     name: publish
-    needs: build
-    if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: [plan, build]
+    if: needs.build.result == 'success' && github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -141,7 +174,7 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          pattern: debs-*
+          pattern: deb-*
           path: dist
           merge-multiple: true
 
