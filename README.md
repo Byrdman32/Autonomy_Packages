@@ -44,8 +44,10 @@ Dependencies between the packages resolve automatically: installing `autonomy-pr
 - The repository is a flat apt repository stored as the assets of the `apt` release: every `.deb`, the
   `Packages` index, and a `Release` file signed with the repository key. Packages are only ever added, so an old
   Autonomy_Services tag can still install what it was built with.
-- CI builds only what isn't published yet, on native amd64 and arm64 runners; header-only packages are built once
-  as `all`. Pull requests build and test; merging to `develop` publishes.
+- CI builds only what isn't published yet, one job per package and architecture, all at once, on native amd64
+  and arm64 runners; header-only packages are built once as `all`. A job whose dependency isn't published yet
+  builds a private copy of it to build against, so no job waits for another. Slow recipes (`weight` in the
+  recipe) start first. Pull requests build and test; merging to `develop` publishes, only if every job passed.
 
 ## Changing a package
 
