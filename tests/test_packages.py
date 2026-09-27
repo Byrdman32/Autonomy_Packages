@@ -123,3 +123,42 @@ def test_architecture_all_packages_cannot_contain_binaries(tmp_path):
     (stage / "usr/local/lib/libx.so").write_bytes(b"\x7fELF" + b"\0" * 12)
     with pytest.raises(packages.PackagingError, match="architecture 'all' but installs compiled files: usr/local/lib/libx.so"):
         packages.package(recipe, {"headers": recipe}, "amd64", packages.load_settings(tmp_path), stage, tmp_path / "out")
+
+
+def test_build_makes_a_private_copy_of_unpublished_all_dependencies(tmp_path, monkeypatch):
+    # The arm64 run doesn't publish 'all' packages, but can still need one that the amd64 run hasn't published yet.
+    write_repo(tmp_path, {"headers": BASE + 'architecture = "all"\n', "lib": BASE + 'depends = ["headers"]\n'})
+    events = []
+
+    def fake_build(recipe, recipes, arch, settings, out, work):
+        events.append(("build", recipe.name, out))
+        return out / recipe.file_name(arch)
+
+    monkeypatch.setattr(packages, "build_recipe", fake_build)
+    monkeypatch.setattr(packages, "apt_install", lambda names: events.append(("install", names[0].rsplit("/", 1)[-1])))
+    monkeypatch.setattr(packages, "run", lambda command, **kwargs: None)
+
+    out = tmp_path / "dist"
+    args = packages.argparse.Namespace(arch="arm64", index=None, only=None, repo_url=None, keyring=None, out=out)
+    assert packages.build(args, root=tmp_path) == 0
+
+    assert [event[:2] for event in events] == [
+        ("build", "headers"),
+        ("install", "autonomy-headers_1.0-1_all.deb"),
+        ("build", "lib"),
+    ]
+    assert events[0][2] != out  # the private copy isn't part of the run's output
+    assert events[2][2] == out
+
+
+def test_build_installs_published_dependencies_from_the_repository(tmp_path, monkeypatch):
+    write_repo(tmp_path, {"base": BASE, "lib": BASE + 'depends = ["base"]\n'})
+    (tmp_path / "Packages").write_text("Package: autonomy-base\nVersion: 1.0-1\nArchitecture: amd64\n")
+    events = []
+    monkeypatch.setattr(packages, "build_recipe", lambda recipe, recipes, arch, settings, out, work: events.append(("build", recipe.name)) or out / "x.deb")
+    monkeypatch.setattr(packages, "apt_install", lambda names: events.append(("install", names[0])))
+    monkeypatch.setattr(packages, "run", lambda command, **kwargs: None)
+
+    args = packages.argparse.Namespace(arch="amd64", index=tmp_path / "Packages", only=None, repo_url=None, keyring=None, out=tmp_path / "dist")
+    assert packages.build(args, root=tmp_path) == 0
+    assert events == [("install", "autonomy-base=1.0-1"), ("build", "lib")]

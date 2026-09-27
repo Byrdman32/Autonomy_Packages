@@ -349,33 +349,53 @@ def build_recipe(recipe: Recipe, recipes: dict[str, Recipe], arch: str, settings
     return package(recipe, recipes, arch, settings, stage, out)
 
 
-def build(args: argparse.Namespace) -> int:
-    recipes = load_recipes()
-    settings = load_settings()
+def build(args: argparse.Namespace, root: Path = ROOT) -> int:
+    recipes = load_recipes(root)
+    settings = load_settings(root)
     work_plan = plan(recipes, read_index(args.index), args.arch, include_all=args.arch == "amd64")
     if args.only:
         work_plan.build = [recipe for recipe in work_plan.build if recipe.name in args.only]
     if not work_plan.build:
         print("Nothing to build.")
         return 0
-    building = {recipe.name for recipe in work_plan.build}
     if args.repo_url and work_plan.published:
         configure_apt_source(args.repo_url, args.keyring)
     else:
         run(["apt-get", "update"])
+
+    published = {recipe.name for recipe in work_plan.published}
     built: dict[str, Path] = {}
-    for recipe in work_plan.build:
-        for name in recipe.depends:
+    installed: set[str] = set()
+
+    with tempfile.TemporaryDirectory(prefix="private-") as private:
+
+        def ensure_installed(name: str) -> None:
+            """Installs a dependency: freshly built, published, or (for an unpublished 'all' package that another
+            architecture's run publishes) a private copy built here only to build against."""
+            if name in installed:
+                return
             dependency = recipes[name]
+            for inner in dependency.depends:
+                ensure_installed(inner)
             if name in built:
                 apt_install([str(built[name].resolve())])
-            elif name not in building:
+            elif name in published:
                 apt_install([f"{dependency.package}={dependency.deb_version}"])
+            elif dependency.architecture == "all":
+                print(f"{dependency.package} isn't published yet; building a private copy to build against", flush=True)
+                with tempfile.TemporaryDirectory(prefix=f"{name}-") as work:
+                    deb = build_recipe(dependency, recipes, args.arch, settings, Path(private), Path(work))
+                apt_install([str(deb.resolve())])
             else:
-                raise PackagingError(f"{name} wasn't built before {recipe.name}")
-        with tempfile.TemporaryDirectory(prefix=f"{recipe.name}-") as work:
-            built[recipe.name] = build_recipe(recipe, recipes, args.arch, settings, args.out, Path(work))
-        print(f"Built {built[recipe.name].name}", flush=True)
+                raise PackagingError(f"{name} is neither published nor built in this run")
+            installed.add(name)
+
+        for recipe in work_plan.build:
+            for name in recipe.depends:
+                ensure_installed(name)
+            with tempfile.TemporaryDirectory(prefix=f"{recipe.name}-") as work:
+                built[recipe.name] = build_recipe(recipe, recipes, args.arch, settings, args.out, Path(work))
+            print(f"Built {built[recipe.name].name}", flush=True)
     return 0
 
 
