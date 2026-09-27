@@ -1,0 +1,7 @@
+# ruff settings for the packaging tools and their tests (CI job lint).
+line-length = 170
+target-version = "py312"
+
+[lint]
+# Pyflakes (F: unused imports, undefined names, ...) plus ruff's default pycodestyle errors.
+select = ["F", "E4", "E7", "E9"]
