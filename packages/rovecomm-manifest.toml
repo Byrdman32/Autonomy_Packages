@@ -1,0 +1,10 @@
+# The RoveComm manifest (every board's IP address and packets), which rovecomm_gateway loads at run time.
+# RoveComm_Base has no numeric tags; the version is the commit's date.
+description = "RoveComm manifest.json, the rover's board addresses and packet definitions"
+version = "2026.09.26"
+revision = 1
+source = "https://github.com/MissouriMRDT/RoveComm.git"
+commit = "d551d06bd06aae14b29f48d4a22f587245b20a5f"
+architecture = "all"
+cmake = false
+install_files = [["manifest.json", "share/rovecomm/manifest.json"]]
