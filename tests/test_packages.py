@@ -251,16 +251,13 @@ def test_install_files_are_copied_under_the_prefix_and_must_be_relative(tmp_path
         packages.load_recipes(tmp_path)
 
 
-def test_rovecomm_recipe_is_pinned_to_a_commit_with_its_manifest():
-    recipe = packages.load_recipes(ROOT)["rovecomm"]
-    assert recipe.commit and recipe.submodules
-    assert ["data/RoveComm/manifest.json", "share/rovecomm/manifest.json"] in recipe.install_files
+def test_rovecomm_manifest_recipe_installs_only_the_manifest():
+    recipe = packages.load_recipes(ROOT)["rovecomm-manifest"]
+    assert recipe.commit and not recipe.cmake and recipe.architecture == "all"
+    assert recipe.install_files == [["manifest.json", "share/rovecomm/manifest.json"]]
 
 
-def test_patches_must_exist_in_the_patches_directory(tmp_path):
-    write_repo(tmp_path, {"a": BASE + 'patches = ["fix.patch"]\n'})
-    with pytest.raises(packages.PackagingError, match="no patch 'fix.patch'"):
+def test_recipes_without_cmake_must_install_files(tmp_path):
+    write_repo(tmp_path, {"a": BASE + "cmake = false\n"})
+    with pytest.raises(packages.PackagingError, match="without cmake must list install_files"):
         packages.load_recipes(tmp_path)
-    (tmp_path / "packages" / "patches").mkdir()
-    (tmp_path / "packages" / "patches" / "fix.patch").write_text("")
-    assert packages.load_recipes(tmp_path)["a"].patches == ["fix.patch"]
