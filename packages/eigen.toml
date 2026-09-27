@@ -1,0 +1,8 @@
+description = "Eigen header-only linear algebra library"
+version = "5.0.1"
+revision = 1
+source = "https://gitlab.com/libeigen/eigen.git"
+tag = "{version}"
+architecture = "all"
+# Header-only: skip Eigen's own BLAS and LAPACK libraries, which nothing links.
+cmake_args = ["-DEIGEN_BUILD_DOC=OFF", "-DEIGEN_BUILD_TESTING=OFF", "-DEIGEN_BUILD_BLAS=OFF", "-DEIGEN_BUILD_LAPACK=OFF"]

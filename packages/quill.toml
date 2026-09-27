@@ -1,0 +1,6 @@
+description = "Quill header-only asynchronous logging library"
+version = "13.0.0"
+revision = 1
+source = "https://github.com/odygrd/quill.git"
+tag = "v{version}"
+architecture = "all"

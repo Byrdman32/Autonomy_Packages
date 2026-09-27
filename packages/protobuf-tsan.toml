@@ -1,0 +1,15 @@
+# protobuf's headers add a member to every message under TSan, so TSan builds need a libprotobuf built the same way.
+# Libraries only: protoc's output doesn't depend on sanitizers.
+description = "Protocol Buffers C++ runtime built with ThreadSanitizer (static, no protoc)"
+version = "36.2"
+revision = 1
+source = "https://github.com/protocolbuffers/protobuf.git"
+tag = "v{version}"
+prefix = "/opt/sanitizers/tsan"
+build_type = "Release"
+cflags = "-fsanitize=thread"
+depends = ["abseil-tsan"]
+cmake_args = [
+    "-Dprotobuf_ABSL_PROVIDER=package", "-Dprotobuf_BUILD_TESTS=OFF", "-Dprotobuf_BUILD_SHARED_LIBS=OFF",
+    "-Dprotobuf_BUILD_PROTOC_BINARIES=OFF", "-Dprotobuf_BUILD_LIBUPB=OFF", "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+]

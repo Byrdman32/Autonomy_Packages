@@ -1,0 +1,5 @@
+maintainer = "Byrdman32 <byrdman32@byrdsoftware.com>"
+origin = "Autonomy"
+label = "Autonomy Packages"
+package_prefix = "autonomy-"
+release_tag = "apt"

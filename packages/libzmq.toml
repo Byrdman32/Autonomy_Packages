@@ -1,0 +1,7 @@
+description = "ZeroMQ messaging library (shared)"
+version = "4.3.5"
+revision = 1
+source = "https://github.com/zeromq/libzmq.git"
+tag = "v{version}"
+# libzmq 4.3.5 still declares a CMake minimum older than CMake 4 accepts.
+cmake_args = ["-DZMQ_BUILD_TESTS=OFF", "-DWITH_PERF_TOOL=OFF", "-DENABLE_DRAFTS=OFF", "-DBUILD_STATIC=OFF", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"]

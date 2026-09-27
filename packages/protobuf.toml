@@ -1,0 +1,7 @@
+description = "Protocol Buffers C++ runtime and protoc (shared)"
+version = "36.2"
+revision = 1
+source = "https://github.com/protocolbuffers/protobuf.git"
+tag = "v{version}"
+depends = ["abseil"]
+cmake_args = ["-Dprotobuf_ABSL_PROVIDER=package", "-Dprotobuf_BUILD_TESTS=OFF", "-Dprotobuf_BUILD_SHARED_LIBS=ON"]

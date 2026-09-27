@@ -1,0 +1,8 @@
+description = "Header-only C++ binding for ZeroMQ"
+version = "4.11.0"
+revision = 1
+source = "https://github.com/zeromq/cppzmq.git"
+tag = "v{version}"
+architecture = "all"
+depends = ["libzmq"]
+cmake_args = ["-DCPPZMQ_BUILD_TESTS=OFF"]

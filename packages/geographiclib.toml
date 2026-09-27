@@ -1,0 +1,6 @@
+description = "GeographicLib geodesic and UTM conversions (shared)"
+version = "2.7"
+revision = 1
+source = "https://github.com/geographiclib/geographiclib.git"
+tag = "v{version}"
+cmake_args = ["-DBUILD_DOCUMENTATION=OFF", "-DBUILD_MANPAGES=OFF"]
