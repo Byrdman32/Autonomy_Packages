@@ -1,0 +1,210 @@
+name: packages
+
+on:
+  pull_request:
+    branches: [develop]
+
+  push:
+    branches: [develop]
+
+  workflow_dispatch:
+
+concurrency:
+  group: packages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_TAG: apt
+  REPO_URL: https://github.com/${{ github.repository }}/releases/download/apt
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tests and ruff
+        run: |
+          pipx run --spec pytest==9.1.1 pytest -q -p no:cacheprovider tests
+          pipx run --spec ruff==0.16.9 ruff check .
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "### 🧹 lint"
+            echo
+            echo "Recipe and packaging tests, ruff and actionlint: **${{ job.status }}**."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  build:
+    name: build:${{ matrix.arch }}
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download the published index
+        run: |
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            curl -fsSL --retry 5 --retry-all-errors -o Packages "${REPO_URL}/Packages"
+          else
+            echo "Nothing published yet."
+            : > Packages
+          fi
+
+      - id: plan
+        name: Plan
+        run: |
+          python3 tools/packages.py plan --arch "${{ matrix.arch }}" --index Packages | tee plan.json
+          echo "count=$(python3 -c 'import json; print(len(json.load(open("plan.json"))["build"]))')" >> "${GITHUB_OUTPUT}"
+
+      - if: steps.plan.outputs.count != '0'
+        uses: docker/setup-buildx-action@v4
+
+      - if: steps.plan.outputs.count != '0'
+        name: Builder image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/builder.Dockerfile
+          tags: autonomy-packages-builder
+          load: true
+          cache-from: type=gha,scope=builder-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=builder-${{ matrix.arch }}
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+          DOCKER_BUILD_SUMMARY: "false"
+
+      - if: steps.plan.outputs.count != '0'
+        name: Build packages
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo autonomy-packages-builder \
+            python3 tools/packages.py build --arch "${{ matrix.arch }}" --index Packages --out dist --repo-url "${REPO_URL}"
+          sudo chown -R "$(id -u):$(id -g)" dist
+
+      - if: steps.plan.outputs.count != '0'
+        uses: actions/upload-artifact@v7
+        with:
+          name: debs-${{ matrix.arch }}
+          path: dist/*.deb
+
+      - name: Job summary
+        if: always() && steps.plan.outcome == 'success'
+        run: |
+          python3 - "${{ matrix.arch }}" "${{ job.status }}" >> "${GITHUB_STEP_SUMMARY}" <<'PY'
+          import json, sys
+          from pathlib import Path
+          arch, status = sys.argv[1:]
+          plan = json.load(open("plan.json"))
+          built = {path.name for path in Path("dist").glob("*.deb")}
+          print(f"### 📦 build:{arch}\n")
+          if not plan["build"]:
+              print(f"Nothing to build: all {len(plan['published'])} packages are already published.")
+          else:
+              print("| Package | Version | File | Result |\n| --- | --- | --- | --- |")
+              for item in plan["build"]:
+                  result = "✅ built" if item["file"] in built else ("❌ failed" if status != "success" else "⏭️ not built")
+                  print(f"| `{item['package']}` | {item['version']} | `{item['file']}` | {result} |")
+              print(f"\n{len(plan['published'])} other packages are already published.")
+          PY
+
+  publish:
+    name: publish
+    needs: build
+    if: github.ref == 'refs/heads/develop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: packages-publish
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: debs-*
+          path: dist
+          merge-multiple: true
+
+      - id: new
+        name: Anything to publish?
+        run: |
+          shopt -s nullglob
+          aDebs=(dist/*.deb)
+          echo "count=${#aDebs[@]}" >> "${GITHUB_OUTPUT}"
+
+      - if: steps.new.outputs.count != '0'
+        name: Index
+        run: |
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            curl -fsSL --retry 5 --retry-all-errors -o Packages "${REPO_URL}/Packages"
+          else
+            : > Packages
+          fi
+          python3 tools/packages.py index --index Packages --debs dist --out repo | tee index.json
+
+      - if: steps.new.outputs.count != '0'
+        name: Sign
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: |
+          export GNUPGHOME="${RUNNER_TEMP}/gnupg"
+          install -d -m 700 "${GNUPGHOME}"
+          gpg --batch --import <<< "${APT_SIGNING_KEY}"
+          gpg --batch --yes --clearsign -o repo/InRelease repo/Release
+          gpg --batch --yes --armor --detach-sign -o repo/Release.gpg repo/Release
+          # The secret must match the committed public key that consumers trust.
+          gpgv --keyring "${PWD}/keys/autonomy-archive-keyring.gpg" repo/InRelease
+          cp keys/autonomy-archive-keyring.gpg repo/
+
+      - if: steps.new.outputs.count != '0'
+        name: Publish
+        run: |
+          if ! gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            gh release create "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" --latest=false \
+              --title "apt repository" \
+              --notes "Storage for the apt repository: every published package and its signed index. See the README for how to use it. Assets are only ever added; don't edit this release by hand."
+          fi
+          # Packages first, so the index never names a file that isn't there yet. Never clobber a published package.
+          gh release upload "${RELEASE_TAG}" dist/*.deb --repo "${GITHUB_REPOSITORY}"
+          gh release upload "${RELEASE_TAG}" repo/Packages repo/Packages.gz repo/Release repo/InRelease repo/Release.gpg \
+            repo/autonomy-archive-keyring.gpg --repo "${GITHUB_REPOSITORY}" --clobber
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "### 🚀 publish"
+            echo
+            if [ "${{ steps.new.outputs.count }}" = "0" ]; then
+              echo "Nothing new to publish."
+            elif [ -f index.json ]; then
+              python3 - <<'PY'
+          import json
+          report = json.load(open("index.json"))
+          print("\n".join(f"- `{package}`" for package in report["added"]))
+          print(f"\n{report['total']} packages in the repository.")
+          PY
+              echo
+              echo "Repository: \`${REPO_URL}\`"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
