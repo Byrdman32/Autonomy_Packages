@@ -3,6 +3,7 @@
 description = "Protocol Buffers C++ runtime built with ThreadSanitizer (static, no protoc)"
 version = "36.2"
 revision = 1
+weight = 3
 source = "https://github.com/protocolbuffers/protobuf.git"
 tag = "v{version}"
 prefix = "/opt/sanitizers/tsan"

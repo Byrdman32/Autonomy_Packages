@@ -1,6 +1,7 @@
 description = "Protocol Buffers C++ runtime and protoc (shared)"
 version = "36.2"
 revision = 1
+weight = 4
 source = "https://github.com/protocolbuffers/protobuf.git"
 tag = "v{version}"
 depends = ["abseil"]

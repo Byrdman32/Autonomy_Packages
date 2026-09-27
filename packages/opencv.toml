@@ -1,6 +1,7 @@
 description = "OpenCV without CUDA, GUI or FFmpeg (shared)"
 version = "5.0.0"
 revision = 1
+weight = 10
 source = "https://github.com/opencv/opencv.git"
 tag = "{version}"
 # OpenCV picks up Eigen when it's installed, as it did in the image.

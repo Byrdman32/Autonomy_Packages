@@ -1,6 +1,7 @@
 description = "Abseil built with ThreadSanitizer, for TSan builds of code that uses protobuf (static)"
 version = "20260817.0"
 revision = 1
+weight = 2
 source = "https://github.com/abseil/abseil-cpp.git"
 tag = "{version}"
 prefix = "/opt/sanitizers/tsan"
