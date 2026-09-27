@@ -215,3 +215,52 @@ def test_one_package_job_builds_private_copies_of_unpublished_dependencies(tmp_p
     ]
     assert [event[2] == out for event in events if event[0] == "build"] == [False, False, True]
 
+
+
+def test_recipes_build_from_exactly_one_of_tag_and_commit(tmp_path):
+    body = 'description = "d"\nsource = "s"\nversion = "1.0"\nrevision = 1\n'
+    write_repo(tmp_path, {})
+    recipe_file = tmp_path / "packages" / "a.toml"
+
+    recipe_file.write_text(body + 'commit = "' + "a" * 40 + '"\n')
+    recipe = packages.load_recipes(tmp_path)["a"]
+    assert recipe.source_ref == "a" * 40
+
+    recipe_file.write_text(body)
+    with pytest.raises(packages.PackagingError, match="exactly one of tag and commit"):
+        packages.load_recipes(tmp_path)
+    recipe_file.write_text(body + 'tag = "v{version}"\ncommit = "' + "a" * 40 + '"\n')
+    with pytest.raises(packages.PackagingError, match="exactly one of tag and commit"):
+        packages.load_recipes(tmp_path)
+    recipe_file.write_text(body + 'commit = "abc123"\n')
+    with pytest.raises(packages.PackagingError, match="full 40-character SHA"):
+        packages.load_recipes(tmp_path)
+
+
+def test_install_files_are_copied_under_the_prefix_and_must_be_relative(tmp_path):
+    write_repo(tmp_path, {"a": BASE + 'prefix = "/opt/a"\ninstall_files = [["data/m.json", "share/a/m.json"]]\n'})
+    recipe = packages.load_recipes(tmp_path)["a"]
+    source = tmp_path / "src"
+    (source / "data").mkdir(parents=True)
+    (source / "data" / "m.json").write_text("{}")
+    packages.install_extra_files(recipe, source, tmp_path / "stage")
+    assert (tmp_path / "stage" / "opt/a/share/a/m.json").read_text() == "{}"
+
+    (tmp_path / "packages" / "a.toml").write_text('description = "d"\nsource = "s"\ntag = "t"\n' + BASE + 'install_files = [["../x", "y"]]\n')
+    with pytest.raises(packages.PackagingError, match="both relative"):
+        packages.load_recipes(tmp_path)
+
+
+def test_rovecomm_recipe_is_pinned_to_a_commit_with_its_manifest():
+    recipe = packages.load_recipes(ROOT)["rovecomm"]
+    assert recipe.commit and recipe.submodules
+    assert ["data/RoveComm/manifest.json", "share/rovecomm/manifest.json"] in recipe.install_files
+
+
+def test_patches_must_exist_in_the_patches_directory(tmp_path):
+    write_repo(tmp_path, {"a": BASE + 'patches = ["fix.patch"]\n'})
+    with pytest.raises(packages.PackagingError, match="no patch 'fix.patch'"):
+        packages.load_recipes(tmp_path)
+    (tmp_path / "packages" / "patches").mkdir()
+    (tmp_path / "packages" / "patches" / "fix.patch").write_text("")
+    assert packages.load_recipes(tmp_path)["a"].patches == ["fix.patch"]

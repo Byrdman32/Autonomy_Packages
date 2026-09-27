@@ -1,0 +1,12 @@
+# RoveComm_CPP has no tag here: v25.2.3 plus 33 commits, which moved its manifest to the boards' current packets
+# (GPS with accuracy, PMS currents and voltages). Built standalone, so its headers use RoveComm's own
+# AutonomyThread; its own prefix, because it installs generic include/util and include/interfaces directories.
+description = "RoveComm C++ networking library (static) and the RoveComm manifest"
+version = "25.2.3.33"
+revision = 1
+source = "https://github.com/MissouriMRDT/RoveComm_CPP.git"
+commit = "bca1c255718804803615a4d9d435a12a2e2b6969"
+submodules = true
+prefix = "/opt/rovecomm"
+patches = ["rovecomm-no-eigen.patch"]
+install_files = [["data/RoveComm/manifest.json", "share/rovecomm/manifest.json"]]

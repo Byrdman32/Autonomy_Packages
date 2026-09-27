@@ -1,0 +1,16 @@
+RoveComm_CPP doesn't use Eigen, but its standalone Linux build requires Eigen 3.x, which Eigen 5 refuses.
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 911c067..83062af 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -149,9 +149,6 @@ else()
+             add_library(GTest::GTest INTERFACE IMPORTED)
+             target_link_libraries(GTest::GTest INTERFACE gtest_main)
+         endif()
+-
+-        ## Find Eigen3.
+-        find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+     else()
+         message("-- RoveComm_CPP -- LIBRARY MODE")
+     endif()

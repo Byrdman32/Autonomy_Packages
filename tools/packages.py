@@ -52,8 +52,12 @@ class Recipe:
     version: str
     revision: int
     source: str
-    tag: str
-    architecture: str = "any"  # "any" (built per architecture) or "all"
+    tag: str = ""
+    commit: str = ""
+    submodules: bool = False
+    patches: list[str] = field(default_factory=list)
+    install_files: list[list[str]] = field(default_factory=list)
+    architecture: str = "any"
     prefix: str = "/usr/local"
     build_type: str = "Release"
     cflags: str = ""
@@ -61,6 +65,11 @@ class Recipe:
     apt: list[str] = field(default_factory=list)  # build-time apt packages
     cmake_args: list[str] = field(default_factory=list)
     weight: int = 1  # rough relative build time; heavier recipes start first in CI
+
+    @property
+    def source_ref(self) -> str:
+        """The tag, branch or commit the package is built from."""
+        return self.commit or self.tag.format(version=self.version)
 
     @property
     def deb_version(self) -> str:
@@ -75,6 +84,9 @@ class Recipe:
 
 def load_settings(root: Path = ROOT) -> dict:
     return tomllib.loads((root / "repo.toml").read_text())
+
+
+PATCHES_DIR = "packages/patches"
 
 
 def load_recipes(root: Path = ROOT) -> dict[str, Recipe]:
@@ -92,6 +104,16 @@ def load_recipes(root: Path = ROOT) -> dict[str, Recipe]:
         if not re.fullmatch(r"[A-Za-z0-9.]+", recipe.version) or recipe.revision < 1:
             # Plain versions only: GitHub renames release assets containing '+' or '~'.
             raise PackagingError(f"{path.name}: version must be letters, digits and dots, and revision >= 1")
+        if bool(recipe.tag) == bool(recipe.commit):
+            raise PackagingError(f"{path.name}: set exactly one of tag and commit")
+        if recipe.commit and not re.fullmatch(r"[0-9a-f]{40}", recipe.commit):
+            raise PackagingError(f"{path.name}: commit must be a full 40-character SHA")
+        for entry in recipe.install_files:
+            if len(entry) != 2 or any(part.startswith("/") or ".." in Path(part).parts for part in entry):
+                raise PackagingError(f"{path.name}: install_files entries are [source path, destination], both relative")
+        for patch in recipe.patches:
+            if "/" in patch or not (root / PATCHES_DIR / patch).is_file():
+                raise PackagingError(f"{path.name}: no patch {patch!r} in {PATCHES_DIR}")
         recipes[name] = recipe
     for recipe in recipes.values():
         for dependency in recipe.depends:
@@ -316,7 +338,7 @@ def control_file(recipe: Recipe, recipes: dict[str, Recipe], arch: str, settings
         "Section": "libdevel",
         "Priority": "optional",
         "Homepage": homepage,
-        "Description": f"{recipe.description}\n Built from {homepage} at {recipe.tag.format(version=recipe.version)},\n installed under {recipe.prefix}.",
+        "Description": f"{recipe.description}\n Built from {homepage} at {recipe.source_ref},\n installed under {recipe.prefix}.",
     }
     return "".join(f"{key}: {value}\n" for key, value in fields.items() if value)
 
@@ -356,12 +378,29 @@ def package(recipe: Recipe, recipes: dict[str, Recipe], arch: str, settings: dic
 def build_recipe(recipe: Recipe, recipes: dict[str, Recipe], arch: str, settings: dict, out: Path, work: Path) -> Path:
     apt_install(recipe.apt)
     source, build, stage = work / "src", work / "build", work / "stage"
-    tag = recipe.tag.format(version=recipe.version)
-    run(["git", "clone", "--quiet", "--depth", "1", "--branch", tag, recipe.source, str(source)])
+    if recipe.commit:
+        run(["git", "init", "--quiet", str(source)])
+        run(["git", "-C", str(source), "fetch", "--quiet", "--depth", "1", recipe.source, recipe.commit])
+        run(["git", "-C", str(source), "checkout", "--quiet", "FETCH_HEAD"])
+    else:
+        run(["git", "clone", "--quiet", "--depth", "1", "--branch", recipe.source_ref, recipe.source, str(source)])
+    if recipe.submodules:
+        run(["git", "-C", str(source), "submodule", "update", "--quiet", "--init", "--recursive", "--depth", "1"])
+    for patch in recipe.patches:
+        run(["git", "-C", str(source), "apply", str(ROOT / PATCHES_DIR / patch)])
     run(cmake_command(recipe, source, build))
     run(["cmake", "--build", str(build), "--parallel", str(os.cpu_count() or 2)])
     run(["cmake", "--install", str(build)], env={**os.environ, "DESTDIR": str(stage)})
+    install_extra_files(recipe, source, stage)
     return package(recipe, recipes, arch, settings, stage, out)
+
+
+def install_extra_files(recipe: Recipe, source: Path, stage: Path) -> None:
+    """Copies the recipe's install_files into the staged prefix."""
+    for source_path, destination in recipe.install_files:
+        target = stage / recipe.prefix.lstrip("/") / destination
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / source_path, target)
 
 
 def build(args: argparse.Namespace, root: Path = ROOT) -> int:
