@@ -162,3 +162,56 @@ def test_build_installs_published_dependencies_from_the_repository(tmp_path, mon
     args = packages.argparse.Namespace(arch="amd64", index=tmp_path / "Packages", only=None, repo_url=None, keyring=None, out=tmp_path / "dist")
     assert packages.build(args, root=tmp_path) == 0
     assert events == [("install", "autonomy-base=1.0-1"), ("build", "lib")]
+
+
+def test_matrix_has_one_job_per_missing_package_and_architecture(tmp_path):
+    write_repo(
+        tmp_path,
+        {
+            "base": BASE,
+            "big": BASE + 'weight = 10\ndepends = ["base"]\n',
+            "headers": BASE + 'architecture = "all"\n',
+        },
+    )
+    index = [stanza("autonomy-base", "1.0-1", "amd64")]
+    jobs = packages.matrix(packages.load_recipes(tmp_path), index)
+    assert [(job["name"], job["arch"]) for job in jobs] == [
+        ("big", "amd64"),  # heaviest first
+        ("big", "arm64"),
+        ("base", "arm64"),
+        ("headers", "amd64"),  # architecture-independent: built once
+    ]
+    assert jobs[0]["file"] == "autonomy-big_1.0-1_amd64.deb"
+
+
+def test_repository_matrix_starts_with_opencv():
+    recipes = packages.load_recipes(ROOT)
+    jobs = packages.matrix(recipes, [])
+    assert [job["name"] for job in jobs[:2]] == ["opencv", "opencv"]
+    assert len(jobs) == 2 * sum(r.architecture == "any" for r in recipes.values()) + sum(r.architecture == "all" for r in recipes.values())
+
+
+def test_one_package_job_builds_private_copies_of_unpublished_dependencies(tmp_path, monkeypatch):
+    write_repo(tmp_path, {"base": BASE, "mid": BASE + 'depends = ["base"]\n', "top": BASE + 'depends = ["mid"]\n'})
+    events = []
+
+    def fake_build(recipe, recipes, arch, settings, out, work):
+        events.append(("build", recipe.name, out))
+        return out / recipe.file_name(arch)
+
+    monkeypatch.setattr(packages, "build_recipe", fake_build)
+    monkeypatch.setattr(packages, "apt_install", lambda names: events.append(("install", names[0].rsplit("/", 1)[-1])))
+    monkeypatch.setattr(packages, "run", lambda command, **kwargs: None)
+
+    out = tmp_path / "dist"
+    args = packages.argparse.Namespace(arch="amd64", index=None, only=["top"], repo_url=None, keyring=None, out=out)
+    assert packages.build(args, root=tmp_path) == 0
+    assert [event[:2] for event in events] == [
+        ("build", "base"),
+        ("install", "autonomy-base_1.0-1_amd64.deb"),
+        ("build", "mid"),
+        ("install", "autonomy-mid_1.0-1_amd64.deb"),
+        ("build", "top"),
+    ]
+    assert [event[2] == out for event in events if event[0] == "build"] == [False, False, True]
+

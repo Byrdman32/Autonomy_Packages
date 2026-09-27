@@ -3,8 +3,10 @@
 
 Standard library only (Python 3.11+ for tomllib).
 
-    packages.py plan  --arch ARCH [--index Packages]            what this run needs to build, in build order
+    packages.py plan   --arch ARCH [--index Packages]           what an architecture needs built, in build order
+    packages.py matrix [--index Packages]                       the CI build matrix: one job per missing package
     packages.py build --arch ARCH [--index Packages] --out DIR  build those packages (as root, in the builder image)
+                      [--only RECIPE...]                        just these; unpublished dependencies get private copies
                       [--repo-url URL --keyring FILE]           where to install already-published dependencies from
     packages.py index [--index Packages] --debs DIR --out DIR   merge new .debs into the index; write Packages and Release
 
@@ -58,6 +60,7 @@ class Recipe:
     depends: list[str] = field(default_factory=list)  # other recipes, pinned to their exact version
     apt: list[str] = field(default_factory=list)  # build-time apt packages
     cmake_args: list[str] = field(default_factory=list)
+    weight: int = 1  # rough relative build time; heavier recipes start first in CI
 
     @property
     def deb_version(self) -> str:
@@ -210,6 +213,18 @@ def plan(recipes: dict[str, Recipe], index: list[dict[str, str]], arch: str, inc
     if problems:
         raise PackagingError("\n".join(problems))
     return Plan(to_build, done)
+
+
+def matrix(recipes: dict[str, Recipe], index: list[dict[str, str]]) -> list[dict[str, str]]:
+    """One CI job per missing package and architecture; 'all' packages are built once, on amd64.
+
+    Recipes whose builds are slow come first, so they start first if the runner limit queues some jobs.
+    """
+    jobs = []
+    for arch in ARCHITECTURES:
+        for recipe in plan(recipes, index, arch, include_all=arch == "amd64").build:
+            jobs.append({"name": recipe.name, "package": recipe.package, "version": recipe.deb_version, "arch": arch, "file": recipe.file_name(arch)})
+    return sorted(jobs, key=lambda job: (-recipes[job["name"]].weight, job["name"], job["arch"]))
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -370,8 +385,9 @@ def build(args: argparse.Namespace, root: Path = ROOT) -> int:
     with tempfile.TemporaryDirectory(prefix="private-") as private:
 
         def ensure_installed(name: str) -> None:
-            """Installs a dependency: freshly built, published, or (for an unpublished 'all' package that another
-            architecture's run publishes) a private copy built here only to build against."""
+            """Installs a dependency: freshly built in this run, published, or else a private copy built here only
+            to build against. CI builds each package in its own job, so an unpublished dependency is being
+            published by another job of the same run."""
             if name in installed:
                 return
             dependency = recipes[name]
@@ -381,13 +397,11 @@ def build(args: argparse.Namespace, root: Path = ROOT) -> int:
                 apt_install([str(built[name].resolve())])
             elif name in published:
                 apt_install([f"{dependency.package}={dependency.deb_version}"])
-            elif dependency.architecture == "all":
+            else:
                 print(f"{dependency.package} isn't published yet; building a private copy to build against", flush=True)
                 with tempfile.TemporaryDirectory(prefix=f"{name}-") as work:
                     deb = build_recipe(dependency, recipes, args.arch, settings, Path(private), Path(work))
                 apt_install([str(deb.resolve())])
-            else:
-                raise PackagingError(f"{name} is neither published nor built in this run")
             installed.add(name)
 
         for recipe in work_plan.build:
@@ -475,6 +489,8 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
 
     plan_command = commands.add_parser("plan", help="list what an architecture's run builds")
+    matrix_command = commands.add_parser("matrix", help="the CI build matrix: one entry per missing package and architecture")
+    matrix_command.add_argument("--index", type=Path, help="the published Packages file; missing means nothing is published")
     build_command = commands.add_parser("build", help="build the missing packages for an architecture")
     for command in (plan_command, build_command):
         command.add_argument("--arch", choices=ARCHITECTURES, required=True)
@@ -482,7 +498,7 @@ def main(argv: list[str] | None = None) -> int:
     build_command.add_argument("--out", type=Path, required=True)
     build_command.add_argument("--repo-url", help="published repository, for dependencies that aren't rebuilt")
     build_command.add_argument("--keyring", type=Path, default=ROOT / "keys" / "autonomy-archive-keyring.gpg")
-    build_command.add_argument("--only", nargs="+", metavar="RECIPE", help="build only these (for local testing)")
+    build_command.add_argument("--only", nargs="+", metavar="RECIPE", help="build only these")
 
     index_command = commands.add_parser("index", help="add built packages to the index")
     index_command.add_argument("--index", type=Path)
@@ -491,6 +507,9 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
+        if args.command == "matrix":
+            print(json.dumps(matrix(load_recipes(), read_index(args.index))))
+            return 0
         if args.command == "plan":
             result = plan(load_recipes(), read_index(args.index), args.arch, include_all=args.arch == "amd64")
             print(json.dumps(result.to_json(args.arch), indent=2))
