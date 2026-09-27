@@ -14,7 +14,7 @@ changing one pinned version rebuilds one package, not all of them.
 | `autonomy-geographiclib` | GeographicLib (shared) |
 | `autonomy-googletest` | GoogleTest and GoogleMock (static) |
 | `autonomy-opencv` | OpenCV without CUDA, GUI or FFmpeg (shared) |
-| `autonomy-rovecomm` | RoveComm_CPP (static) and the RoveComm `manifest.json`, in `/opt/rovecomm` |
+| `autonomy-rovecomm-manifest` | The RoveComm `manifest.json`, in `/usr/local/share/rovecomm` |
 | `autonomy-abseil-tsan`, `autonomy-protobuf-tsan` | Abseil and protobuf built with ThreadSanitizer, in `/opt/sanitizers/tsan` |
 
 Everything installs under `/usr/local` unless noted. Versions are `<upstream version>-<revision>`, e.g.
@@ -56,9 +56,8 @@ Dependencies between the packages resolve automatically: installing `autonomy-pr
 - **Packaging change for the same version** (CMake arguments, a fix): increase `revision`.
 - **Upstream has no tag for the commit you need:** set `commit` (the full SHA) instead of `tag`, and a version
   like `25.2.3.33` (the last tag plus the commit count from `git describe`).
-- **Upstream needs a fix to build here:** add a patch to `packages/patches/` with a first line saying why, and
-  list it in the recipe's `patches`. `submodules = true` and `install_files` cover submodule sources and files
-  upstream doesn't install.
+- **Files upstream doesn't install, or a package of files only:** list them in `install_files` as
+  `[source path, destination under the prefix]`; set `cmake = false` to skip the build entirely.
 - **A dependency changed:** increase `revision` in every recipe that depends on it. CI fails with the recipes to
   bump if you forget, since those packages were built against the old version.
 
