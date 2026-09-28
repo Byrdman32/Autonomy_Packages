@@ -1,0 +1,12 @@
+# Abseil's hash tables add fields under AddressSanitizer, so an ASan build of code that shares them with Abseil (and
+# protobuf, which uses them) needs Abseil built the same way.
+description = "Abseil built with AddressSanitizer, for ASan builds of code that uses protobuf (static)"
+version = "20260817.0"
+revision = 1
+weight = 2
+source = "https://github.com/abseil/abseil-cpp.git"
+tag = "{version}"
+prefix = "/opt/sanitizers/asan"
+build_type = "Release"
+cflags = "-fsanitize=address -fno-omit-frame-pointer"
+cmake_args = ["-DBUILD_SHARED_LIBS=OFF", "-DABSL_PROPAGATE_CXX_STD=ON", "-DABSL_BUILD_TESTING=OFF", "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"]

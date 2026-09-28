@@ -1,0 +1,17 @@
+# protobuf's headers lay out generated messages differently under AddressSanitizer, and protobuf is built on Abseil's
+# hash tables, so ASan builds need a libprotobuf built the same way. Libraries only: protoc's output doesn't depend on
+# sanitizers.
+description = "Protocol Buffers C++ runtime built with AddressSanitizer (static, no protoc)"
+version = "36.2"
+revision = 1
+weight = 3
+source = "https://github.com/protocolbuffers/protobuf.git"
+tag = "v{version}"
+prefix = "/opt/sanitizers/asan"
+build_type = "Release"
+cflags = "-fsanitize=address -fno-omit-frame-pointer"
+depends = ["abseil-asan"]
+cmake_args = [
+    "-Dprotobuf_ABSL_PROVIDER=package", "-Dprotobuf_BUILD_TESTS=OFF", "-Dprotobuf_BUILD_SHARED_LIBS=OFF",
+    "-Dprotobuf_BUILD_PROTOC_BINARIES=OFF", "-Dprotobuf_BUILD_LIBUPB=OFF", "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+]
