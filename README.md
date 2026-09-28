@@ -16,6 +16,7 @@ changing one pinned version rebuilds one package, not all of them.
 | `autonomy-opencv` | OpenCV without CUDA, GUI or FFmpeg (shared) |
 | `autonomy-rovecomm-manifest` | The RoveComm `manifest.json`, in `/usr/local/share/rovecomm` |
 | `autonomy-abseil-tsan`, `autonomy-protobuf-tsan` | Abseil and protobuf built with ThreadSanitizer, in `/opt/sanitizers/tsan` |
+| `autonomy-abseil-asan`, `autonomy-protobuf-asan` | Abseil and protobuf built with AddressSanitizer, in `/opt/sanitizers/asan` |
 
 Everything installs under `/usr/local` unless noted. Versions are `<upstream version>-<revision>`, e.g.
 `autonomy-protobuf 36.2-1`.
